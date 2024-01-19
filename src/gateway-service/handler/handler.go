@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"lab2/pkg/jobqueue"
+	"lab2/src/jobqueue"
 	"net/http"
 	"strconv"
 

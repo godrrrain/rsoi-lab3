@@ -1,8 +1,8 @@
 package main
 
 import (
-	"lab2/pkg/jobqueue"
 	"lab2/src/gateway-service/handler"
+	"lab2/src/jobqueue"
 	"time"
 
 	"github.com/gin-contrib/cors"
