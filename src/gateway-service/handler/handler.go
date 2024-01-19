@@ -340,7 +340,7 @@ func (h *Handler) GetRating(c *gin.Context) {
 		return http.DefaultClient.Do(req)
 	})
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, ErrorResponse{Message: "Rating Service unavailable"})
+		c.JSON(http.StatusServiceUnavailable, ErrorResponse{Message: "Bonus Service unavailable"})
 		return
 	}
 
@@ -631,7 +631,7 @@ func (h *Handler) CreateReservation(c *gin.Context) {
 		return http.DefaultClient.Do(reqRating)
 	})
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, ErrorResponse{Message: "Rating Service unavailable"})
+		c.JSON(http.StatusServiceUnavailable, ErrorResponse{Message: "Bonus Service unavailable"})
 		return
 	}
 
@@ -965,63 +965,16 @@ func (h *Handler) ReturnBook(c *gin.Context) {
 		h.jobScheduler.JobQueue <- job
 	}
 
-	//getting rating
-	requestRatingURL := fmt.Sprintf("%s/api/v1/rating/", ratingService)
-
-	reqRating, err := http.NewRequest(http.MethodGet, requestRatingURL, nil)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{
-			Message: err.Error(),
-		})
-		return
-	}
-	reqRating.Header.Set("X-User-Name", username)
-
-	iresRating, err := h.ratingCB.Execute(func() (interface{}, error) {
-		return http.DefaultClient.Do(reqRating)
-	})
-	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, ErrorResponse{Message: "Rating Service unavailable"})
-		return
-	}
-
-	resRating, ok := iresRating.(*http.Response)
-	if !ok {
-		c.AbortWithStatus(http.StatusInternalServerError)
-		return
-	}
-
-	resBodyRating, err := io.ReadAll(resRating.Body)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{
-			Message: err.Error(),
-		})
-		return
-	}
-
-	var rating RatingResponse
-	if json.Unmarshal(resBodyRating, &rating) != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{
-			Message: err.Error(),
-		})
-		return
-	}
-
 	//update rating
+	var rating RatingResponse
+
 	if resFee != 0 {
 		resFee = resFee * -10
 	} else {
 		resFee = 1
 	}
 
-	rating.Stars = rating.Stars + resFee
-
-	if rating.Stars < 0 {
-		rating.Stars = 0
-	}
-	if rating.Stars > 100 {
-		rating.Stars = 100
-	}
+	rating.Stars = resFee
 
 	requestUpdRatingURL := fmt.Sprintf("%s/api/v1/rating/", ratingService)
 
