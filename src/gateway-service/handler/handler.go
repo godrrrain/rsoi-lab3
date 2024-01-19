@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"lab2/pkg/jobqueue"
 	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/sony/gobreaker"
 )
 
 const (
@@ -110,10 +112,20 @@ type ReservationAmount struct {
 	Amount int `json:"amount"`
 }
 
-type Handler struct{}
+type Handler struct {
+	libraryCB     *gobreaker.CircuitBreaker
+	ratingCB      *gobreaker.CircuitBreaker
+	reservationCB *gobreaker.CircuitBreaker
+	jobScheduler  *jobqueue.JobScheduler
+}
 
-func NewHandler() *Handler {
-	return &Handler{}
+func NewHandler(libraryCircuitBreaker, ratingCircuitBreaker, reservationCircuitBreaker *gobreaker.CircuitBreaker, jobScheduler *jobqueue.JobScheduler) *Handler {
+	return &Handler{
+		libraryCB:     libraryCircuitBreaker,
+		ratingCB:      ratingCircuitBreaker,
+		reservationCB: reservationCircuitBreaker,
+		jobScheduler:  jobScheduler,
+	}
 }
 
 func (h *Handler) GetLibrariesByCity(c *gin.Context) {
@@ -132,11 +144,17 @@ func (h *Handler) GetLibrariesByCity(c *gin.Context) {
 	q.Add("city", c.Query("city"))
 	req.URL.RawQuery = q.Encode()
 
-	res, err := http.DefaultClient.Do(req)
+	ires, err := h.libraryCB.Execute(func() (interface{}, error) {
+		return http.DefaultClient.Do(req)
+	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{
-			Message: err.Error(),
-		})
+		c.JSON(http.StatusServiceUnavailable, ErrorResponse{Message: "Library Service unavailable"})
+		return
+	}
+
+	res, ok := ires.(*http.Response)
+	if !ok {
+		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
 
@@ -219,11 +237,17 @@ func (h *Handler) GetBooksByLibraryUid(c *gin.Context) {
 	q.Add("showAll", c.Query("showAll"))
 	req.URL.RawQuery = q.Encode()
 
-	res, err := http.DefaultClient.Do(req)
+	ires, err := h.libraryCB.Execute(func() (interface{}, error) {
+		return http.DefaultClient.Do(req)
+	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{
-			Message: err.Error(),
-		})
+		c.JSON(http.StatusServiceUnavailable, ErrorResponse{Message: "Library Service unavailable"})
+		return
+	}
+
+	res, ok := ires.(*http.Response)
+	if !ok {
+		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
 
@@ -312,11 +336,17 @@ func (h *Handler) GetRating(c *gin.Context) {
 	}
 	req.Header.Set("X-User-Name", username)
 
-	res, err := http.DefaultClient.Do(req)
+	ires, err := h.ratingCB.Execute(func() (interface{}, error) {
+		return http.DefaultClient.Do(req)
+	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{
-			Message: err.Error(),
-		})
+		c.JSON(http.StatusServiceUnavailable, ErrorResponse{Message: "Rating Service unavailable"})
+		return
+	}
+
+	res, ok := ires.(*http.Response)
+	if !ok {
+		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
 
@@ -363,11 +393,17 @@ func (h *Handler) GetReservations(c *gin.Context) {
 	}
 	req.Header.Set("X-User-Name", username)
 
-	res, err := http.DefaultClient.Do(req)
+	ires, err := h.reservationCB.Execute(func() (interface{}, error) {
+		return http.DefaultClient.Do(req)
+	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{
-			Message: err.Error(),
-		})
+		c.JSON(http.StatusServiceUnavailable, ErrorResponse{Message: "Reservation Service unavailable"})
+		return
+	}
+
+	res, ok := ires.(*http.Response)
+	if !ok {
+		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
 
@@ -400,11 +436,33 @@ func (h *Handler) GetReservations(c *gin.Context) {
 			return
 		}
 
-		res, err := http.DefaultClient.Do(req)
+		ires, err := h.libraryCB.Execute(func() (interface{}, error) {
+			return http.DefaultClient.Do(req)
+		})
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, ErrorResponse{
-				Message: err.Error(),
-			})
+
+			var book BookToUserResponse
+			book.Book_uid = reservation.Book_uid
+
+			var library LibraryResponse
+			library.Library_uid = reservation.Library_uid
+
+			response[i] = ReservationToUserResponse{
+				Reservation_uid: reservation.Reservation_uid,
+				Status:          reservation.Status,
+				Start_date:      reservation.Start_date,
+				Till_date:       reservation.Till_date,
+				Book:            book,
+				Library:         library,
+			}
+
+			fmt.Println("Library Service unavailable")
+			continue
+		}
+
+		res, ok := ires.(*http.Response)
+		if !ok {
+			c.AbortWithStatus(http.StatusInternalServerError)
 			return
 		}
 
@@ -434,11 +492,32 @@ func (h *Handler) GetReservations(c *gin.Context) {
 			return
 		}
 
-		resLib, err := http.DefaultClient.Do(reqLib)
+		iresLib, err := h.libraryCB.Execute(func() (interface{}, error) {
+			return http.DefaultClient.Do(reqLib)
+		})
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, ErrorResponse{
-				Message: err.Error(),
-			})
+			var book BookToUserResponse
+			book.Book_uid = reservation.Book_uid
+
+			var library LibraryResponse
+			library.Library_uid = reservation.Library_uid
+
+			response[i] = ReservationToUserResponse{
+				Reservation_uid: reservation.Reservation_uid,
+				Status:          reservation.Status,
+				Start_date:      reservation.Start_date,
+				Till_date:       reservation.Till_date,
+				Book:            book,
+				Library:         library,
+			}
+
+			fmt.Println("Library Service unavailable")
+			continue
+		}
+
+		resLib, ok := iresLib.(*http.Response)
+		if !ok {
+			c.AbortWithStatus(http.StatusInternalServerError)
 			return
 		}
 
@@ -506,11 +585,17 @@ func (h *Handler) CreateReservation(c *gin.Context) {
 	}
 	reqAmount.Header.Set("X-User-Name", username)
 
-	resAmount, err := http.DefaultClient.Do(reqAmount)
+	iresAmount, err := h.reservationCB.Execute(func() (interface{}, error) {
+		return http.DefaultClient.Do(reqAmount)
+	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{
-			Message: err.Error(),
-		})
+		c.JSON(http.StatusServiceUnavailable, ErrorResponse{Message: "Reservation Service unavailable"})
+		return
+	}
+
+	resAmount, ok := iresAmount.(*http.Response)
+	if !ok {
+		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
 
@@ -542,11 +627,17 @@ func (h *Handler) CreateReservation(c *gin.Context) {
 	}
 	reqRating.Header.Set("X-User-Name", username)
 
-	resRating, err := http.DefaultClient.Do(reqRating)
+	iresRating, err := h.ratingCB.Execute(func() (interface{}, error) {
+		return http.DefaultClient.Do(reqRating)
+	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{
-			Message: err.Error(),
-		})
+		c.JSON(http.StatusServiceUnavailable, ErrorResponse{Message: "Rating Service unavailable"})
+		return
+	}
+
+	resRating, ok := iresRating.(*http.Response)
+	if !ok {
+		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
 
@@ -627,11 +718,17 @@ func (h *Handler) CreateReservation(c *gin.Context) {
 		return
 	}
 
-	resBook, err := http.DefaultClient.Do(reqBook)
+	iresBook, err := h.libraryCB.Execute(func() (interface{}, error) {
+		return http.DefaultClient.Do(reqBook)
+	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{
-			Message: err.Error(),
-		})
+		c.JSON(http.StatusServiceUnavailable, ErrorResponse{Message: "Library Service unavailable"})
+		return
+	}
+
+	resBook, ok := iresBook.(*http.Response)
+	if !ok {
+		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
 
@@ -661,11 +758,17 @@ func (h *Handler) CreateReservation(c *gin.Context) {
 		return
 	}
 
-	resLib, err := http.DefaultClient.Do(reqLib)
+	iresLib, err := h.libraryCB.Execute(func() (interface{}, error) {
+		return http.DefaultClient.Do(reqLib)
+	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{
-			Message: err.Error(),
-		})
+		c.JSON(http.StatusServiceUnavailable, ErrorResponse{Message: "Library Service unavailable"})
+		return
+	}
+
+	resLib, ok := iresLib.(*http.Response)
+	if !ok {
+		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
 
@@ -760,11 +863,17 @@ func (h *Handler) ReturnBook(c *gin.Context) {
 	}
 	reqReserv.Header.Set("X-User-Name", username)
 
-	resReserv, err := http.DefaultClient.Do(reqReserv)
+	iresReserv, err := h.reservationCB.Execute(func() (interface{}, error) {
+		return http.DefaultClient.Do(reqReserv)
+	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{
-			Message: err.Error(),
-		})
+		c.JSON(http.StatusServiceUnavailable, ErrorResponse{Message: "Reservation Service unavailable"})
+		return
+	}
+
+	resReserv, ok := iresReserv.(*http.Response)
+	if !ok {
+		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
 
@@ -850,10 +959,10 @@ func (h *Handler) ReturnBook(c *gin.Context) {
 
 	_, err = http.DefaultClient.Do(reqCount)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{
-			Message: err.Error(),
+		job := jobqueue.NewExecJob(func() (interface{}, error) {
+			return http.DefaultClient.Do(reqCount)
 		})
-		return
+		h.jobScheduler.JobQueue <- job
 	}
 
 	//getting rating
@@ -868,11 +977,17 @@ func (h *Handler) ReturnBook(c *gin.Context) {
 	}
 	reqRating.Header.Set("X-User-Name", username)
 
-	resRating, err := http.DefaultClient.Do(reqRating)
+	iresRating, err := h.ratingCB.Execute(func() (interface{}, error) {
+		return http.DefaultClient.Do(reqRating)
+	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{
-			Message: err.Error(),
-		})
+		c.JSON(http.StatusServiceUnavailable, ErrorResponse{Message: "Rating Service unavailable"})
+		return
+	}
+
+	resRating, ok := iresRating.(*http.Response)
+	if !ok {
+		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
 
@@ -929,9 +1044,11 @@ func (h *Handler) ReturnBook(c *gin.Context) {
 
 	_, err = http.DefaultClient.Do(reqUpdRating)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{
-			Message: err.Error(),
+		c.Status(http.StatusNoContent)
+		job := jobqueue.NewExecJob(func() (interface{}, error) {
+			return http.DefaultClient.Do(reqUpdRating)
 		})
+		h.jobScheduler.JobQueue <- job
 		return
 	}
 

@@ -1,15 +1,31 @@
 package main
 
 import (
+	"lab2/pkg/jobqueue"
 	"lab2/src/gateway-service/handler"
+	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/sony/gobreaker"
 )
 
 func main() {
 
-	handler := handler.NewHandler()
+	var st gobreaker.Settings
+	st.Name = "Library Circuit Breaker"
+	libraryCb := gobreaker.NewCircuitBreaker(st)
+
+	st.Name = "Rating Circuit Breaker"
+	ratingCb := gobreaker.NewCircuitBreaker(st)
+
+	st.Name = "Reservation Circuit Breaker"
+	reservationCb := gobreaker.NewCircuitBreaker(st)
+
+	jobScheduler := jobqueue.NewJobScheduler(10 * time.Second)
+	jobScheduler.Start()
+
+	handler := handler.NewHandler(libraryCb, ratingCb, reservationCb, jobScheduler)
 
 	router := gin.Default()
 
